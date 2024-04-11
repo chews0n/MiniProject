@@ -7,69 +7,9 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include "backend.hpp"
+#include <omp>
 
-// Function prototypes
-bool readInputData(const std::string& inputFilePath, const std::string& wellName, std::vector<double>& times, std::vector<double>& pressures);
-bool writeOutputData(const std::string& outputFilePath, const std::vector<double>& times, const std::vector<double>& pressures,
-                     const std::vector<double>& predictedPressures, const std::vector<double>& deltaP);
-bool writePlotData(const std::string& outputFilePath, const std::vector<double>& times, const std::vector<double>& pressures,
-                   const std::vector<double>& predictedPressures, double testStartTime, double testEndTime, double slope);
-int findTimeColumnIndex(const std::vector<std::string>& headers);
-int findPressureColumnIndex(const std::vector<std::string>& headers, const std::string& wellName);
-void smoothPressureData(std::vector<double>& pressures, std::vector<double>& times, double threshold);
-bool isNumericOrNaN(const std::string& str);
-std::vector<std::string> splitString(const std::string& str, char delimiter);
-void calculateTrendAndDeltaP(const std::vector<double>& times, const std::vector<double>& pressures,
-                             double slope, double testStartTime, double testEndTime,
-                             std::vector<double>& trendTimes, std::vector<double>& trendPressures,
-                             std::vector<double>& predictedPressures, std::vector<double>& deltaP);
-std::string generateOutputFileName(const std::string& wellName, const std::string& suffix);
-double calculateSlope(const std::vector<double>& times, const std::vector<double>& pressures, double testStartTime);
-
-int main(int argc, char* argv[]) {
-    if (argc != 6) {
-        std::cerr << "Usage: " << argv[0] << " <input_file> <well_name> <slope> <test_start_time> <test_end_time>" << std::endl;
-        return 1;
-    }
-
-    std::string inputFilePath = argv[1];
-    std::string wellName = argv[2];
-    double testStartTime = std::stod(argv[4]);
-    double testEndTime = std::stod(argv[5]);
-
-    std::vector<double> times, pressures;
-    if (!readInputData(inputFilePath, wellName, times, pressures)) {
-        return 1; // Error message is printed inside readInputData
-    }
-
-    smoothPressureData(pressures, times, 0.5);
-
-    double slope;
-    if (std::string(argv[3]) == "auto") {
-        slope = calculateSlope(times, pressures, testStartTime);
-    } else {
-        slope = std::stod(argv[3]);
-    }
-
-    std::vector<double> trendTimes, trendPressures, predictedPressures, deltaP;
-    calculateTrendAndDeltaP(times, pressures, slope, testStartTime, testEndTime,
-                            trendTimes, trendPressures, predictedPressures, deltaP);
-
-    std::string outputFileName = generateOutputFileName(wellName, "_output.csv");
-    if (!writeOutputData(outputFileName, times, pressures, predictedPressures, deltaP)) {
-        std::cerr << "Failed to write output data." << std::endl;
-        return 1;
-    }
-
-    std::string plotFileName = generateOutputFileName(wellName, "_plot_data.csv");
-    if (!writePlotData(plotFileName, times, pressures, predictedPressures, testStartTime, testEndTime, slope)) {
-        std::cerr << "Failed to write plot data." << std::endl;
-        return 1;
-        
-    }
-
-    return 0;
-}
 
 
 bool readInputData(const std::string& inputFilePath, const std::string& wellName, std::vector<double>& times, std::vector<double>& pressures) {
@@ -175,21 +115,21 @@ std::string generateOutputFileName(const std::string& wellName, const std::strin
 }
 
 int findTimeColumnIndex(const std::vector<std::string>& headers) {
-    for (size_t i = 0; i < headers.size(); ++i) {
+    for (unsigned int i = 0; i < headers.size(); ++i) {
         std::string header = headers[i];
         std::transform(header.begin(), header.end(), header.begin(), ::tolower);
-        if (header == "time" || header == "time step") {
-            return static_cast<int>(i);
+        if (header == "time" || header == "time step" || header == "Time") {
+            return i;
         }
     }
     return 0; // Assume the first column is the time column if no explicit time column found
 }
-
+ 
 void smoothPressureData(std::vector<double>& pressures, std::vector<double>& times, double threshold) {
     std::vector<double> smoothedPressures;
     std::vector<double> smoothedTimes;
 
-    if (!pressures.empty()) {
+    if (!pressures.empty() && !times.empty()) {
         smoothedPressures.push_back(pressures[0]);
         smoothedTimes.push_back(times[0]);
 
@@ -207,7 +147,9 @@ void smoothPressureData(std::vector<double>& pressures, std::vector<double>& tim
                 smoothedTimes.push_back(times[i]);
             }
         }
-    }
+    } else { 
+		// what to do if it is empty
+	}
 
     pressures = std::move(smoothedPressures);
     times = std::move(smoothedTimes);
@@ -234,13 +176,14 @@ void calculateTrendAndDeltaP(const std::vector<double>& times, const std::vector
                              std::vector<double>& trendTimes, std::vector<double>& trendPressures,
                              std::vector<double>& predictedPressures, std::vector<double>& deltaP) {
     // Find the index of the data point just before the test start time
-    size_t startIndex = 0;
+    size_t startIndex = -1;
     while (startIndex < times.size() && times[startIndex] < testStartTime) {
         ++startIndex;
     }
-    if (startIndex > 0) {
-        --startIndex;
-    }
+
+	if (startIndex < 0) { 
+		// return some error
+	}
 
     // Calculate the intercept of the trend line
     double intercept = pressures[startIndex] - slope * times[startIndex];
@@ -288,3 +231,50 @@ double calculateSlope(const std::vector<double>& times, const std::vector<double
     double slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
     return slope;
 } 
+
+
+int main(int argc, char* argv[]) {
+    if (argc != 6) {
+        std::cerr << "Usage: " << argv[0] << " <input_file> <well_name> <slope> <test_start_time> <test_end_time>" << std::endl;
+		// maybe put in a description of the inputs
+        return 1;
+    }
+
+    std::string inputFilePath = argv[1];
+    std::string wellName = argv[2];
+    double testStartTime = std::stod(argv[4]);
+    double testEndTime = std::stod(argv[5]);
+
+    std::vector<double> times, pressures;
+    if (!readInputData(inputFilePath, wellName, times, pressures)) {
+        return 1; // Error message is printed inside readInputData
+    }
+
+    smoothPressureData(pressures, times, 0.5);
+
+    double slope;
+    if (std::string(argv[3]) == "auto") {
+        slope = calculateSlope(times, pressures, testStartTime);
+    } else {
+        slope = std::stod(argv[3]);
+    }
+
+    std::vector<double> trendTimes, trendPressures, predictedPressures, deltaP;
+    calculateTrendAndDeltaP(times, pressures, slope, testStartTime, testEndTime,
+                            trendTimes, trendPressures, predictedPressures, deltaP);
+
+    std::string outputFileName = generateOutputFileName(wellName, "_output.csv");
+    if (!writeOutputData(outputFileName, times, pressures, predictedPressures, deltaP)) {
+        std::cerr << "Failed to write output data." << std::endl;
+        return 1;
+    }
+
+    std::string plotFileName = generateOutputFileName(wellName, "_plot_data.csv");
+    if (!writePlotData(plotFileName, times, pressures, predictedPressures, testStartTime, testEndTime, slope)) {
+        std::cerr << "Failed to write plot data." << std::endl;
+        return 1;
+        
+    }
+
+    return 0;
+}
